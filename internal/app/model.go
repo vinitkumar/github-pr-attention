@@ -364,6 +364,7 @@ func (m Model) renderDetailContent() string {
 		metaLine("Author", d.Author, "State", d.State),
 		metaLine("Base", d.BaseRef, "Head", d.HeadRef),
 		metaLine("Review", emptyDash(d.ReviewDecision), "Draft", fmt.Sprint(d.Draft)),
+		metaLine("CI", formatCIStatus(d.CIStatus), "Head SHA", shortSHA(d.HeadSHA)),
 		metaLine("Changes", fmt.Sprintf("+%d -%d", d.Additions, d.Deletions), "Files", fmt.Sprint(d.ChangedFiles)),
 	)
 
@@ -578,6 +579,24 @@ func renderFiles(files []github.PullRequestFile, width int) string {
 		sections = append(sections, lipgloss.JoinVertical(lipgloss.Left, header, patch))
 	}
 	return strings.Join(sections, "\n\n")
+}
+
+func formatCIStatus(status github.CIStatus) string {
+	state := string(status.State)
+	if status.State == "" {
+		state = string(github.CIStateUnknown)
+	}
+	if status.Summary == "" {
+		return state
+	}
+	return state + " (" + status.Summary + ")"
+}
+
+func shortSHA(sha string) string {
+	if sha == "" {
+		return "-"
+	}
+	return truncate(sha, 7)
 }
 
 func renderPatch(patch string, width int) string {

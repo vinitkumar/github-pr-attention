@@ -148,6 +148,10 @@ func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, number 
 	if err := c.do(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
 		return PullRequestDetail{}, err
 	}
+	ciStatus, err := c.GetCIStatus(ctx, owner, repo, response.Head.SHA)
+	if err != nil {
+		ciStatus = CIStatus{State: CIStateUnknown, Summary: "CI unavailable: " + err.Error()}
+	}
 
 	return PullRequestDetail{
 		PullRequest: PullRequest{
@@ -165,13 +169,112 @@ func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, number 
 		Draft:          response.Draft,
 		Mergeable:      response.Mergeable,
 		ReviewDecision: response.ReviewDecision,
+		HeadSHA:        response.Head.SHA,
 		HeadRef:        response.Head.Ref,
 		BaseRef:        response.Base.Ref,
 		Additions:      response.Additions,
 		Deletions:      response.Deletions,
 		ChangedFiles:   response.ChangedFiles,
 		Body:           response.Body,
+		CIStatus:       ciStatus,
 	}, nil
+}
+
+func (c *Client) GetCIStatus(ctx context.Context, owner, repo, sha string) (CIStatus, error) {
+	if sha == "" {
+		return CIStatus{State: CIStateUnknown, Summary: "No head SHA"}, nil
+	}
+
+	var statuses combinedStatusResponse
+	if err := c.do(ctx, http.MethodGet, c.repoEndpoint(owner, repo, "commits", sha, "status"), nil, &statuses); err != nil {
+		return CIStatus{}, err
+	}
+
+	var checks checkRunsResponse
+	checkRunsEndpoint, err := url.Parse(c.repoEndpoint(owner, repo, "commits", sha, "check-runs"))
+	if err != nil {
+		return CIStatus{}, err
+	}
+	query := checkRunsEndpoint.Query()
+	query.Set("per_page", "100")
+	checkRunsEndpoint.RawQuery = query.Encode()
+	if err := c.do(ctx, http.MethodGet, checkRunsEndpoint.String(), nil, &checks); err != nil {
+		return CIStatus{}, err
+	}
+
+	return summarizeCI(statuses, checks), nil
+}
+
+func summarizeCI(statuses combinedStatusResponse, checks checkRunsResponse) CIStatus {
+	items := make([]CICheck, 0, len(statuses.Statuses)+len(checks.CheckRuns))
+	for _, status := range statuses.Statuses {
+		items = append(items, CICheck{
+			Name:       status.Context,
+			Status:     status.State,
+			Conclusion: status.State,
+			DetailsURL: status.TargetURL,
+		})
+	}
+	for _, check := range checks.CheckRuns {
+		items = append(items, CICheck{
+			Name:        check.Name,
+			Status:      check.Status,
+			Conclusion:  check.Conclusion,
+			DetailsURL:  check.DetailsURL,
+			CompletedAt: check.CompletedAt,
+		})
+	}
+
+	if len(items) == 0 {
+		return CIStatus{State: CIStateUnknown, Summary: "No checks reported", Checks: items}
+	}
+
+	counts := map[CIState]int{}
+	for _, item := range items {
+		counts[ciStateForCheck(item)]++
+	}
+
+	state := CIStateSuccess
+	if counts[CIStateFailure] > 0 {
+		state = CIStateFailure
+	} else if counts[CIStatePending] > 0 {
+		state = CIStatePending
+	} else if counts[CIStateUnknown] > 0 {
+		state = CIStateUnknown
+	}
+
+	summaryParts := []string{}
+	if counts[CIStateSuccess] > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("%d passed", counts[CIStateSuccess]))
+	}
+	if counts[CIStatePending] > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("%d pending", counts[CIStatePending]))
+	}
+	if counts[CIStateFailure] > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("%d failed", counts[CIStateFailure]))
+	}
+	if counts[CIStateUnknown] > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("%d unknown", counts[CIStateUnknown]))
+	}
+
+	return CIStatus{State: state, Summary: strings.Join(summaryParts, ", "), Checks: items}
+}
+
+func ciStateForCheck(check CICheck) CIState {
+	status := strings.ToLower(check.Status)
+	conclusion := strings.ToLower(check.Conclusion)
+	switch {
+	case status == "pending" || status == "queued" || status == "in_progress":
+		return CIStatePending
+	case conclusion == "success" || conclusion == "neutral" || conclusion == "skipped":
+		return CIStateSuccess
+	case conclusion == "pending":
+		return CIStatePending
+	case conclusion == "failure" || conclusion == "timed_out" || conclusion == "cancelled" || conclusion == "action_required" || conclusion == "startup_failure" || status == "failure" || status == "error":
+		return CIStateFailure
+	default:
+		return CIStateUnknown
+	}
 }
 
 func (c *Client) GetPullRequestFiles(ctx context.Context, owner, repo string, number int) ([]PullRequestFile, error) {
@@ -336,6 +439,7 @@ type pullResponse struct {
 
 type refObject struct {
 	Ref string `json:"ref"`
+	SHA string `json:"sha"`
 }
 
 type pullFileResponse struct {
@@ -345,4 +449,27 @@ type pullFileResponse struct {
 	Deletions int    `json:"deletions"`
 	Changes   int    `json:"changes"`
 	Patch     string `json:"patch"`
+}
+
+type combinedStatusResponse struct {
+	State    string           `json:"state"`
+	Statuses []statusResponse `json:"statuses"`
+}
+
+type statusResponse struct {
+	Context   string `json:"context"`
+	State     string `json:"state"`
+	TargetURL string `json:"target_url"`
+}
+
+type checkRunsResponse struct {
+	CheckRuns []checkRunResponse `json:"check_runs"`
+}
+
+type checkRunResponse struct {
+	Name        string     `json:"name"`
+	Status      string     `json:"status"`
+	Conclusion  string     `json:"conclusion"`
+	DetailsURL  string     `json:"details_url"`
+	CompletedAt *time.Time `json:"completed_at"`
 }

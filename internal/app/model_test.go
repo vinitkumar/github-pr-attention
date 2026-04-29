@@ -65,7 +65,12 @@ func TestRenderDetailContentPreservesFencedCode(t *testing.T) {
 		Additions:    12,
 		Deletions:    2,
 		ChangedFiles: 3,
-		Body:         "## Summary\n\nKeeps code readable:\n\n```go\nfmt.Println(\"ok\")\n```\n",
+		HeadSHA:      "abc123456789",
+		CIStatus: github.CIStatus{
+			State:   github.CIStateSuccess,
+			Summary: "2 passed",
+		},
+		Body: "## Summary\n\nKeeps code readable:\n\n```go\nfmt.Println(\"ok\")\n```\n",
 	}
 
 	content := model.renderDetailContent()
@@ -74,6 +79,9 @@ func TestRenderDetailContentPreservesFencedCode(t *testing.T) {
 	}
 	if !strings.Contains(content, "Description") {
 		t.Fatalf("expected rendered detail section label, got:\n%s", content)
+	}
+	if !strings.Contains(content, "success (2 passed)") {
+		t.Fatalf("expected CI summary, got:\n%s", content)
 	}
 }
 

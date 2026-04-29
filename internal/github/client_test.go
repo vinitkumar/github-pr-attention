@@ -113,6 +113,65 @@ func TestGetPullRequestFilesFetchesChangedFiles(t *testing.T) {
 	}
 }
 
+func TestGetPullRequestIncludesCIStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/acme/tool/pulls/42":
+			writeJSON(t, w, pullResponse{
+				ID:     1,
+				Number: 42,
+				Title:  "Add CI",
+				Head:   refObject{Ref: "feature", SHA: "abc123"},
+				Base:   refObject{Ref: "main"},
+				User:   searchUser{Login: "octocat"},
+			})
+		case "/repos/acme/tool/commits/abc123/status":
+			writeJSON(t, w, combinedStatusResponse{Statuses: []statusResponse{{
+				Context: "legacy/status",
+				State:   "success",
+			}}})
+		case "/repos/acme/tool/commits/abc123/check-runs":
+			writeJSON(t, w, checkRunsResponse{CheckRuns: []checkRunResponse{{
+				Name:       "test",
+				Status:     "completed",
+				Conclusion: "failure",
+			}}})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClientWithBaseURL("token", server.URL, server.Client())
+	detail, err := client.GetPullRequest(context.Background(), "acme", "tool", 42)
+	if err != nil {
+		t.Fatalf("GetPullRequest returned error: %v", err)
+	}
+	if detail.HeadSHA != "abc123" {
+		t.Fatalf("HeadSHA = %q", detail.HeadSHA)
+	}
+	if detail.CIStatus.State != CIStateFailure {
+		t.Fatalf("CI state = %q", detail.CIStatus.State)
+	}
+	if !strings.Contains(detail.CIStatus.Summary, "1 failed") {
+		t.Fatalf("CI summary = %q", detail.CIStatus.Summary)
+	}
+}
+
+func TestSummarizeCIReportsPendingChecks(t *testing.T) {
+	status := summarizeCI(combinedStatusResponse{}, checkRunsResponse{CheckRuns: []checkRunResponse{{
+		Name:   "build",
+		Status: "in_progress",
+	}}})
+
+	if status.State != CIStatePending {
+		t.Fatalf("state = %q", status.State)
+	}
+	if status.Summary != "1 pending" {
+		t.Fatalf("summary = %q", status.Summary)
+	}
+}
+
 func TestSubmitReviewValidatesRequestChangesBody(t *testing.T) {
 	client := NewClientWithBaseURL("token", "http://example.test", nil)
 	err := client.SubmitReview(context.Background(), "acme", "tool", 42, ReviewRequestChanges, " ")

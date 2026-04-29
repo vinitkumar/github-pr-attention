@@ -34,12 +34,37 @@ type PullRequestDetail struct {
 	Draft          bool
 	Mergeable      *bool
 	ReviewDecision string
+	HeadSHA        string
 	HeadRef        string
 	BaseRef        string
 	Additions      int
 	Deletions      int
 	ChangedFiles   int
 	Body           string
+	CIStatus       CIStatus
+}
+
+type CIState string
+
+const (
+	CIStateUnknown CIState = "unknown"
+	CIStatePending CIState = "pending"
+	CIStateSuccess CIState = "success"
+	CIStateFailure CIState = "failure"
+)
+
+type CIStatus struct {
+	State   CIState
+	Summary string
+	Checks  []CICheck
+}
+
+type CICheck struct {
+	Name        string
+	Status      string
+	Conclusion  string
+	DetailsURL  string
+	CompletedAt *time.Time
 }
 
 type PullRequestFile struct {
