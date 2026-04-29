@@ -1,0 +1,4 @@
+/pr-attention
+*.log
+.DS_Store
+.gocache/
