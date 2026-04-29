@@ -339,6 +339,11 @@ func (c *Client) Merge(ctx context.Context, owner, repo string, number int) erro
 	return c.do(ctx, http.MethodPut, c.repoEndpoint(owner, repo, "pulls", fmt.Sprint(number), "merge"), payload, nil)
 }
 
+func (c *Client) ClosePullRequest(ctx context.Context, owner, repo string, number int) error {
+	payload := map[string]string{"state": "closed"}
+	return c.do(ctx, http.MethodPatch, c.repoEndpoint(owner, repo, "pulls", fmt.Sprint(number)), payload, nil)
+}
+
 func (c *Client) repoEndpoint(owner, repo string, parts ...string) string {
 	all := append([]string{"repos", owner, repo}, parts...)
 	return c.baseURL + "/" + path.Join(all...)
@@ -375,7 +380,11 @@ func (c *Client) do(ctx context.Context, method, endpoint string, payload any, o
 
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		data, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return fmt.Errorf("github api %s %s failed: %s: %s", method, endpoint, response.Status, strings.TrimSpace(string(data)))
+		responseBody := strings.TrimSpace(string(data))
+		if responseBody == "" {
+			responseBody = "<empty>"
+		}
+		return fmt.Errorf("github api %s %s failed: %s\nresponse: %s", method, endpoint, response.Status, responseBody)
 	}
 
 	if output == nil {

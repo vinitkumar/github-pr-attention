@@ -19,14 +19,16 @@ go run ./cmd/pr-attention
 ## Build
 
 ```sh
-go build -o pr-attention ./cmd/pr-attention
+make build
 ```
 
-The resulting `pr-attention` binary is self-contained.
+The build copies the self-contained `pr-attention` binary to `~/.local/bin`.
+Override the install location with `LOCAL_BIN=/path/to/bin make build`.
 
 ## Keys
 
 - `j` / `k` or arrow keys: move selection
+- `/`: filter the PR list; press `enter` to apply, `ctrl+u` to clear while filtering
 - `enter`: open PR details
 - `tab` in detail view: switch between PR description and changed files
 - `j` / `k` in detail view: scroll PR description
@@ -36,6 +38,8 @@ The resulting `pr-attention` binary is self-contained.
 - `a`: approve the PR
 - `x`: request changes
 - `m`: merge the PR with squash merge
+- `M`: bulk merge all listed PRs with squash merge
+- `d`: close the PR without merging
 - `esc`: go back or cancel compose mode
 - `ctrl+s`: submit compose mode
 - `q`: quit

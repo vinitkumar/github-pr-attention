@@ -23,6 +23,7 @@ type githubClient interface {
 	AddComment(context.Context, string, string, int, string) error
 	SubmitReview(context.Context, string, string, int, github.ReviewEvent, string) error
 	Merge(context.Context, string, string, int) error
+	ClosePullRequest(context.Context, string, string, int) error
 }
 
 type viewMode int
@@ -65,7 +66,9 @@ type Model struct {
 	textarea   textarea.Model
 	viewport   viewport.Model
 	composing  composeAction
-	confirming bool
+	confirming string
+	filter     string
+	filtering  bool
 }
 
 type listLoadedMsg struct {
@@ -125,10 +128,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.prs = msg.prs
-		if m.selected >= len(m.prs) {
-			m.selected = max(0, len(m.prs)-1)
+		filtered := m.filteredPRs()
+		if m.selected >= len(filtered) {
+			m.selected = max(0, len(filtered)-1)
 		}
-		m.status = fmt.Sprintf("%d PRs need attention", len(m.prs))
+		m.status = m.listStatus()
 		return m, nil
 	case detailLoadedMsg:
 		m.loading = false
@@ -150,14 +154,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionDoneMsg:
 		m.loading = false
 		m.err = msg.err
-		m.confirming = false
+		m.confirming = ""
 		if msg.err != nil {
-			m.status = "Action failed"
+			m.status = msg.message
+			if m.status == "" {
+				m.status = "Action failed"
+			}
 			return m, nil
 		}
 		m.status = msg.message
 		if msg.refresh {
 			m.loading = true
+			m.mode = modeList
+			m.detail = nil
+			m.files = nil
 			return m, m.loadList()
 		}
 		return m, nil
@@ -179,6 +189,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.filtering {
+		return m.updateFilterKey(msg)
+	}
+
 	if m.mode == modeCompose {
 		switch msg.String() {
 		case "esc":
@@ -203,7 +217,7 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = modeList
 			m.detail = nil
 			m.files = nil
-			m.status = fmt.Sprintf("%d PRs need attention", len(m.prs))
+			m.status = m.listStatus()
 			return m, nil
 		case "j", "down", "k", "up", "pgdown", "pgup", "home", "end":
 			var cmd tea.Cmd
@@ -220,7 +234,7 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = "Refreshing..."
 		return m, m.loadList()
 	case "j", "down":
-		if m.selected < len(m.prs)-1 {
+		if m.selected < len(m.filteredPRs())-1 {
 			m.selected++
 		}
 	case "k", "up":
@@ -237,7 +251,13 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.mode == modeDetail {
 			m.mode = modeList
 			m.detail = nil
-			m.status = fmt.Sprintf("%d PRs need attention", len(m.prs))
+			m.status = m.listStatus()
+		}
+	case "/":
+		if m.mode == modeList {
+			m.filtering = true
+			m.confirming = ""
+			m.status = "/" + m.filter
 		}
 	case "o":
 		if pr, ok := m.activePR(); ok {
@@ -257,8 +277,8 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "m":
 		if pr, ok := m.activePR(); ok {
-			if !m.confirming {
-				m.confirming = true
+			if m.confirming != "merge" {
+				m.confirming = "merge"
 				m.status = "Press m again to squash merge"
 				return m, nil
 			}
@@ -266,8 +286,60 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "Merging..."
 			return m, m.merge(pr)
 		}
+	case "M":
+		if m.mode == modeList {
+			prs := m.filteredPRs()
+			if len(prs) == 0 {
+				m.status = "No visible PRs to merge"
+				return m, nil
+			}
+			if m.confirming != "bulk-merge" {
+				m.confirming = "bulk-merge"
+				m.status = fmt.Sprintf("Press M again to squash merge %d listed PRs", len(prs))
+				return m, nil
+			}
+			m.loading = true
+			m.status = fmt.Sprintf("Merging %d PRs...", len(prs))
+			return m, m.mergePullRequests(prs)
+		}
+	case "d":
+		if pr, ok := m.activePR(); ok {
+			if m.confirming != "close" {
+				m.confirming = "close"
+				m.status = "Press d again to close without merging"
+				return m, nil
+			}
+			m.loading = true
+			m.status = "Closing..."
+			return m, m.closePullRequest(pr)
+		}
 	default:
-		m.confirming = false
+		m.confirming = ""
+	}
+	return m, nil
+}
+
+func (m Model) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter", "esc":
+		m.filtering = false
+		m.status = m.listStatus()
+	case "backspace", "ctrl+h":
+		if m.filter != "" {
+			m.filter = m.filter[:len(m.filter)-1]
+			m.selected = 0
+		}
+		m.status = "/" + m.filter
+	case "ctrl+u":
+		m.filter = ""
+		m.selected = 0
+		m.status = "/"
+	default:
+		if msg.Type == tea.KeyRunes {
+			m.filter += string(msg.Runes)
+			m.selected = 0
+			m.status = "/" + m.filter
+		}
 	}
 	return m, nil
 }
@@ -292,9 +364,12 @@ func (m Model) View() string {
 		body = m.composeView()
 	}
 
-	footer := helpStyle.Render("j/k move  enter detail  r refresh  o open  c comment  a approve  x changes  m merge  q quit")
+	footer := helpStyle.Render("j/k move  / filter  enter detail  r refresh  o open  c comment  a approve  x changes  m merge  M merge list  d close  q quit")
+	if m.filtering {
+		footer = helpStyle.Render("type filter  enter apply  ctrl+u clear  esc close filter")
+	}
 	if m.mode == modeDetail {
-		footer = helpStyle.Render("tab description/changes  j/k scroll  esc back  o open  c comment  a approve  x changes  m merge  q quit")
+		footer = helpStyle.Render("tab description/changes  j/k scroll  esc back  o open  c comment  a approve  x changes  m merge  d close  q quit")
 	}
 	if m.mode == modeCompose {
 		footer = helpStyle.Render("ctrl+s submit  esc cancel")
@@ -310,14 +385,18 @@ func (m Model) listView() string {
 	if len(m.prs) == 0 {
 		return "\n  No open pull requests currently need your attention."
 	}
+	filtered := m.filteredPRs()
+	if len(filtered) == 0 {
+		return "\n  No pull requests match /" + m.filter
+	}
 
 	available := max(4, m.height-5)
-	start := clamp(m.selected-available/2, 0, max(0, len(m.prs)-available))
-	end := min(len(m.prs), start+available)
+	start := clamp(m.selected-available/2, 0, max(0, len(filtered)-available))
+	end := min(len(filtered), start+available)
 
 	lines := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
-		pr := m.prs[i]
+		pr := filtered[i]
 		prefix := "  "
 		style := itemStyle
 		if i == m.selected {
@@ -487,11 +566,41 @@ func (m Model) merge(pr github.PullRequest) tea.Cmd {
 	}
 }
 
+func (m Model) mergePullRequests(prs []github.PullRequest) tea.Cmd {
+	return func() tea.Msg {
+		failures := []string{}
+		merged := 0
+		for _, pr := range prs {
+			if err := m.client.Merge(context.Background(), pr.Owner, pr.Repo, pr.Number); err != nil {
+				failures = append(failures, fmt.Sprintf("%s #%d: %v", pr.FullName(), pr.Number, err))
+				continue
+			}
+			merged++
+		}
+		if len(failures) == 0 {
+			return actionDoneMsg{message: fmt.Sprintf("Merged %d PRs", merged), refresh: true}
+		}
+		message := fmt.Sprintf("Merged %d/%d PRs; failed: %s", merged, len(prs), strings.Join(failures, "; "))
+		if merged == 0 {
+			return actionDoneMsg{message: "Bulk merge failed", err: fmt.Errorf("%s", message)}
+		}
+		return actionDoneMsg{message: fmt.Sprintf("Merged %d/%d PRs; %d failed", merged, len(prs), len(failures)), err: fmt.Errorf("%s", strings.Join(failures, "\n"))}
+	}
+}
+
+func (m Model) closePullRequest(pr github.PullRequest) tea.Cmd {
+	return func() tea.Msg {
+		err := m.client.ClosePullRequest(context.Background(), pr.Owner, pr.Repo, pr.Number)
+		return actionDoneMsg{message: "PR closed", err: err, refresh: true}
+	}
+}
+
 func (m Model) currentPR() (github.PullRequest, bool) {
-	if m.selected < 0 || m.selected >= len(m.prs) {
+	filtered := m.filteredPRs()
+	if m.selected < 0 || m.selected >= len(filtered) {
 		return github.PullRequest{}, false
 	}
-	return m.prs[m.selected], true
+	return filtered[m.selected], true
 }
 
 func (m Model) activePR() (github.PullRequest, bool) {
@@ -499,6 +608,37 @@ func (m Model) activePR() (github.PullRequest, bool) {
 		return m.detail.PullRequest, true
 	}
 	return m.currentPR()
+}
+
+func (m Model) filteredPRs() []github.PullRequest {
+	query := strings.ToLower(strings.TrimSpace(m.filter))
+	if query == "" {
+		return m.prs
+	}
+	filtered := make([]github.PullRequest, 0, len(m.prs))
+	for _, pr := range m.prs {
+		if strings.Contains(strings.ToLower(prSearchText(pr)), query) {
+			filtered = append(filtered, pr)
+		}
+	}
+	return filtered
+}
+
+func (m Model) listStatus() string {
+	if strings.TrimSpace(m.filter) == "" {
+		return fmt.Sprintf("%d PRs need attention", len(m.prs))
+	}
+	return fmt.Sprintf("%d/%d PRs match /%s", len(m.filteredPRs()), len(m.prs), m.filter)
+}
+
+func prSearchText(pr github.PullRequest) string {
+	return strings.Join([]string{
+		pr.FullName(),
+		fmt.Sprint(pr.Number),
+		pr.Title,
+		pr.Author,
+		reasons(pr.Reasons),
+	}, " ")
 }
 
 func openBrowser(target string) tea.Cmd {

@@ -78,6 +78,60 @@ func TestAddCommentPostsIssueComment(t *testing.T) {
 	}
 }
 
+func TestClosePullRequestPatchesStateClosed(t *testing.T) {
+	var method, requestPath string
+	var payload map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method = r.Method
+		requestPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewClientWithBaseURL("token", server.URL, server.Client())
+	err := client.ClosePullRequest(context.Background(), "acme", "tool", 42)
+	if err != nil {
+		t.Fatalf("ClosePullRequest returned error: %v", err)
+	}
+	if method != http.MethodPatch {
+		t.Fatalf("method = %s", method)
+	}
+	if requestPath != "/repos/acme/tool/pulls/42" {
+		t.Fatalf("path = %s", requestPath)
+	}
+	if payload["state"] != "closed" {
+		t.Fatalf("state = %q", payload["state"])
+	}
+}
+
+func TestMergeFailureIncludesAPIResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = w.Write([]byte(`{"message":"Pull Request is not mergeable","documentation_url":"https://docs.github.com/rest/pulls/pulls#merge-a-pull-request"}`))
+	}))
+	defer server.Close()
+
+	client := NewClientWithBaseURL("token", server.URL, server.Client())
+	err := client.Merge(context.Background(), "acme", "tool", 42)
+	if err == nil {
+		t.Fatal("expected merge error")
+	}
+
+	text := err.Error()
+	if !strings.Contains(text, "405 Method Not Allowed") {
+		t.Fatalf("expected status in error, got %q", text)
+	}
+	if !strings.Contains(text, "response:") {
+		t.Fatalf("expected response label in error, got %q", text)
+	}
+	if !strings.Contains(text, "Pull Request is not mergeable") {
+		t.Fatalf("expected API response body in error, got %q", text)
+	}
+}
+
 func TestGetPullRequestFilesFetchesChangedFiles(t *testing.T) {
 	var requestPath, page string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
