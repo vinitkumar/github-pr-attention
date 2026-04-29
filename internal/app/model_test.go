@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -40,6 +41,39 @@ func TestWrapTextLimitsLines(t *testing.T) {
 	wrapped := wrapText("one two three four five six", 8, 2)
 	if wrapped != "one two\nthree" {
 		t.Fatalf("wrapped = %q", wrapped)
+	}
+}
+
+func TestRenderDetailContentPreservesFencedCode(t *testing.T) {
+	model := New(fakeClient{})
+	model.width = 100
+	model.height = 30
+	model.viewport.Width = 98
+	model.viewport.Height = 26
+	model.detail = &github.PullRequestDetail{
+		PullRequest: github.PullRequest{
+			Owner:  "acme",
+			Repo:   "tool",
+			Number: 42,
+			Title:  "Render markdown",
+			URL:    "https://github.com/acme/tool/pull/42",
+			Author: "octocat",
+		},
+		State:        "open",
+		BaseRef:      "main",
+		HeadRef:      "feature",
+		Additions:    12,
+		Deletions:    2,
+		ChangedFiles: 3,
+		Body:         "## Summary\n\nKeeps code readable:\n\n```go\nfmt.Println(\"ok\")\n```\n",
+	}
+
+	content := model.renderDetailContent()
+	if !strings.Contains(content, "fmt.Println") {
+		t.Fatalf("expected rendered detail to contain code, got:\n%s", content)
+	}
+	if !strings.Contains(content, "Description") {
+		t.Fatalf("expected rendered detail section label, got:\n%s", content)
 	}
 }
 

@@ -28,6 +28,7 @@ The resulting `pr-attention` binary is self-contained.
 
 - `j` / `k` or arrow keys: move selection
 - `enter`: open PR details
+- `j` / `k` in detail view: scroll PR description
 - `r`: refresh inbox
 - `o`: open selected PR in a browser
 - `c`: add an issue comment
@@ -37,4 +38,3 @@ The resulting `pr-attention` binary is self-contained.
 - `esc`: go back or cancel compose mode
 - `ctrl+s`: submit compose mode
 - `q`: quit
-

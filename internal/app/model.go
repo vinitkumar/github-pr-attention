@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/vinitkumar/github-pr-attention/internal/github"
@@ -51,6 +53,7 @@ type Model struct {
 	status     string
 	err        error
 	textarea   textarea.Model
+	viewport   viewport.Model
 	composing  composeAction
 	confirming bool
 }
@@ -97,6 +100,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.textarea.SetWidth(max(20, msg.Width-6))
+		m.viewport.Width = max(20, msg.Width-2)
+		m.viewport.Height = max(4, msg.Height-4)
+		if m.detail != nil {
+			m.viewport.SetContent(m.renderDetailContent())
+		}
 		return m, nil
 	case listLoadedMsg:
 		m.loading = false
@@ -120,6 +128,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.detail = &msg.detail
 		m.mode = modeDetail
+		m.viewport.Width = max(20, m.width-2)
+		m.viewport.Height = max(4, m.height-4)
+		m.viewport.SetContent(m.renderDetailContent())
+		m.viewport.GotoTop()
 		m.status = "Detail loaded"
 		return m, nil
 	case actionDoneMsg:
@@ -145,6 +157,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.textarea, cmd = m.textarea.Update(msg)
 		return m, cmd
 	}
+	if m.mode == modeDetail {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
 	return m, nil
 }
 
@@ -162,6 +179,20 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.textarea, cmd = m.textarea.Update(msg)
 		return m, cmd
+	}
+
+	if m.mode == modeDetail {
+		switch msg.String() {
+		case "esc":
+			m.mode = modeList
+			m.detail = nil
+			m.status = fmt.Sprintf("%d PRs need attention", len(m.prs))
+			return m, nil
+		case "j", "down", "k", "up", "pgdown", "pgup", "home", "end":
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
 	}
 
 	switch msg.String() {
@@ -245,6 +276,9 @@ func (m Model) View() string {
 	}
 
 	footer := helpStyle.Render("j/k move  enter detail  r refresh  o open  c comment  a approve  x changes  m merge  q quit")
+	if m.mode == modeDetail {
+		footer = helpStyle.Render("j/k scroll  esc back  o open  c comment  a approve  x changes  m merge  q quit")
+	}
 	if m.mode == modeCompose {
 		footer = helpStyle.Render("ctrl+s submit  esc cancel")
 	}
@@ -287,19 +321,46 @@ func (m Model) detailView() string {
 		return "\n  No PR selected."
 	}
 
-	d := m.detail
-	lines := []string{
-		"",
-		selectedStyle.Render(fmt.Sprintf("%s #%d", d.FullName(), d.Number)),
-		d.Title,
-		fmt.Sprintf("author: %s  base: %s  head: %s", d.Author, d.BaseRef, d.HeadRef),
-		fmt.Sprintf("state: %s  draft: %t  review: %s", d.State, d.Draft, emptyDash(d.ReviewDecision)),
-		fmt.Sprintf("changes: +%d -%d in %d files", d.Additions, d.Deletions, d.ChangedFiles),
-		d.URL,
-		"",
-		wrapText(d.Body, max(30, m.width-4), max(6, m.height-12)),
+	return "\n" + m.viewport.View()
+}
+
+func (m Model) renderDetailContent() string {
+	if m.detail == nil {
+		return ""
 	}
-	return strings.Join(lines, "\n")
+
+	d := m.detail
+	bodyWidth := max(32, m.viewport.Width-4)
+	body := renderMarkdown(d.Body, bodyWidth)
+	if strings.TrimSpace(body) == "" {
+		body = mutedStyle.Render("No pull request description.")
+	}
+
+	header := lipgloss.JoinVertical(
+		lipgloss.Left,
+		detailRepoStyle.Render(fmt.Sprintf("%s #%d", d.FullName(), d.Number)),
+		detailTitleStyle.Width(bodyWidth).Render(d.Title),
+	)
+
+	meta := lipgloss.JoinVertical(
+		lipgloss.Left,
+		metaLine("Author", d.Author, "State", d.State),
+		metaLine("Base", d.BaseRef, "Head", d.HeadRef),
+		metaLine("Review", emptyDash(d.ReviewDecision), "Draft", fmt.Sprint(d.Draft)),
+		metaLine("Changes", fmt.Sprintf("+%d -%d", d.Additions, d.Deletions), "Files", fmt.Sprint(d.ChangedFiles)),
+	)
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		header,
+		"",
+		metaBoxStyle.Width(bodyWidth).Render(meta),
+		"",
+		linkStyle.Render(d.URL),
+		"",
+		sectionStyle.Render("Description"),
+		body,
+	)
 }
 
 func (m Model) composeView() string {
@@ -433,6 +494,27 @@ func emptyDash(value string) string {
 	return value
 }
 
+func renderMarkdown(value string, width int) string {
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return wrapText(value, width, 200)
+	}
+	rendered, err := renderer.Render(value)
+	if err != nil {
+		return wrapText(value, width, 200)
+	}
+	return strings.TrimRight(rendered, "\n")
+}
+
+func metaLine(leftLabel, leftValue, rightLabel, rightValue string) string {
+	left := labelStyle.Render(leftLabel+":") + " " + valueStyle.Render(leftValue)
+	right := labelStyle.Render(rightLabel+":") + " " + valueStyle.Render(rightValue)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", 4), right)
+}
+
 func wrapText(value string, width int, maxLines int) string {
 	words := strings.Fields(value)
 	if len(words) == 0 {
@@ -490,10 +572,18 @@ func clamp(value, low, high int) int {
 }
 
 var (
-	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	statusStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	itemStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
-	helpStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	titleStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	statusStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	errorStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	itemStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	selectedStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
+	helpStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	detailRepoStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	detailTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
+	metaBoxStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Padding(0, 1)
+	labelStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	valueStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	linkStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Underline(true)
+	sectionStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	mutedStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 )
