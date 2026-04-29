@@ -28,6 +28,7 @@ The resulting `pr-attention` binary is self-contained.
 
 - `j` / `k` or arrow keys: move selection
 - `enter`: open PR details
+- `tab` in detail view: switch between PR description and changed files
 - `j` / `k` in detail view: scroll PR description
 - `r`: refresh inbox
 - `o`: open selected PR in a browser

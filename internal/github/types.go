@@ -42,6 +42,15 @@ type PullRequestDetail struct {
 	Body           string
 }
 
+type PullRequestFile struct {
+	Filename  string
+	Status    string
+	Additions int
+	Deletions int
+	Changes   int
+	Patch     string
+}
+
 type ReviewEvent string
 
 const (

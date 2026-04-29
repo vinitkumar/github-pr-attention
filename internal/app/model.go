@@ -19,6 +19,7 @@ import (
 type githubClient interface {
 	ListAttentionPRs(context.Context) ([]github.PullRequest, error)
 	GetPullRequest(context.Context, string, string, int) (github.PullRequestDetail, error)
+	GetPullRequestFiles(context.Context, string, string, int) ([]github.PullRequestFile, error)
 	AddComment(context.Context, string, string, int, string) error
 	SubmitReview(context.Context, string, string, int, github.ReviewEvent, string) error
 	Merge(context.Context, string, string, int) error
@@ -30,6 +31,13 @@ const (
 	modeList viewMode = iota
 	modeDetail
 	modeCompose
+)
+
+type detailTab int
+
+const (
+	tabDescription detailTab = iota
+	tabChanges
 )
 
 type composeAction int
@@ -47,6 +55,8 @@ type Model struct {
 	prs        []github.PullRequest
 	selected   int
 	detail     *github.PullRequestDetail
+	files      []github.PullRequestFile
+	detailTab  detailTab
 	width      int
 	height     int
 	loading    bool
@@ -65,6 +75,7 @@ type listLoadedMsg struct {
 
 type detailLoadedMsg struct {
 	detail github.PullRequestDetail
+	files  []github.PullRequestFile
 	err    error
 }
 
@@ -127,6 +138,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.detail = &msg.detail
+		m.files = msg.files
+		m.detailTab = tabDescription
 		m.mode = modeDetail
 		m.viewport.Width = max(20, m.width-2)
 		m.viewport.Height = max(4, m.height-4)
@@ -183,9 +196,13 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.mode == modeDetail {
 		switch msg.String() {
+		case "tab":
+			m.toggleDetailTab()
+			return m, nil
 		case "esc":
 			m.mode = modeList
 			m.detail = nil
+			m.files = nil
 			m.status = fmt.Sprintf("%d PRs need attention", len(m.prs))
 			return m, nil
 		case "j", "down", "k", "up", "pgdown", "pgup", "home", "end":
@@ -277,7 +294,7 @@ func (m Model) View() string {
 
 	footer := helpStyle.Render("j/k move  enter detail  r refresh  o open  c comment  a approve  x changes  m merge  q quit")
 	if m.mode == modeDetail {
-		footer = helpStyle.Render("j/k scroll  esc back  o open  c comment  a approve  x changes  m merge  q quit")
+		footer = helpStyle.Render("tab description/changes  j/k scroll  esc back  o open  c comment  a approve  x changes  m merge  q quit")
 	}
 	if m.mode == modeCompose {
 		footer = helpStyle.Render("ctrl+s submit  esc cancel")
@@ -350,6 +367,13 @@ func (m Model) renderDetailContent() string {
 		metaLine("Changes", fmt.Sprintf("+%d -%d", d.Additions, d.Deletions), "Files", fmt.Sprint(d.ChangedFiles)),
 	)
 
+	content := body
+	section := "Description"
+	if m.detailTab == tabChanges {
+		section = "Changes"
+		content = renderFiles(m.files, bodyWidth)
+	}
+
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		header,
@@ -358,8 +382,9 @@ func (m Model) renderDetailContent() string {
 		"",
 		linkStyle.Render(d.URL),
 		"",
-		sectionStyle.Render("Description"),
-		body,
+		renderTabs(m.detailTab),
+		sectionStyle.Render(section),
+		content,
 	)
 }
 
@@ -419,9 +444,25 @@ func (m Model) loadList() tea.Cmd {
 func (m Model) loadDetail(pr github.PullRequest) tea.Cmd {
 	return func() tea.Msg {
 		detail, err := m.client.GetPullRequest(context.Background(), pr.Owner, pr.Repo, pr.Number)
+		if err != nil {
+			return detailLoadedMsg{err: err}
+		}
+		files, err := m.client.GetPullRequestFiles(context.Background(), pr.Owner, pr.Repo, pr.Number)
 		detail.Reasons = pr.Reasons
-		return detailLoadedMsg{detail: detail, err: err}
+		return detailLoadedMsg{detail: detail, files: files, err: err}
 	}
+}
+
+func (m *Model) toggleDetailTab() {
+	if m.detailTab == tabDescription {
+		m.detailTab = tabChanges
+		m.status = fmt.Sprintf("%d changed files", len(m.files))
+	} else {
+		m.detailTab = tabDescription
+		m.status = "Detail loaded"
+	}
+	m.viewport.SetContent(m.renderDetailContent())
+	m.viewport.GotoTop()
 }
 
 func (m Model) comment(pr github.PullRequest, body string) tea.Cmd {
@@ -509,6 +550,54 @@ func renderMarkdown(value string, width int) string {
 	return strings.TrimRight(rendered, "\n")
 }
 
+func renderTabs(active detailTab) string {
+	description := tabStyle.Render("Description")
+	changes := tabStyle.Render("Changes")
+	if active == tabDescription {
+		description = activeTabStyle.Render("Description")
+	} else {
+		changes = activeTabStyle.Render("Changes")
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, description, " ", changes)
+}
+
+func renderFiles(files []github.PullRequestFile, width int) string {
+	if len(files) == 0 {
+		return mutedStyle.Render("No changed files returned by GitHub.")
+	}
+
+	sections := make([]string, 0, len(files))
+	for _, file := range files {
+		header := fileHeaderStyle.Render(
+			fmt.Sprintf("%s  %s  +%d -%d", file.Filename, file.Status, file.Additions, file.Deletions),
+		)
+		patch := renderPatch(file.Patch, width)
+		if strings.TrimSpace(patch) == "" {
+			patch = mutedStyle.Render("Binary file or patch too large to display.")
+		}
+		sections = append(sections, lipgloss.JoinVertical(lipgloss.Left, header, patch))
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+func renderPatch(patch string, width int) string {
+	lines := strings.Split(strings.TrimRight(patch, "\n"), "\n")
+	rendered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		style := patchContextStyle
+		switch {
+		case strings.HasPrefix(line, "@@"):
+			style = patchHunkStyle
+		case strings.HasPrefix(line, "+"):
+			style = patchAddStyle
+		case strings.HasPrefix(line, "-"):
+			style = patchDeleteStyle
+		}
+		rendered = append(rendered, style.Render(truncate(line, width)))
+	}
+	return strings.Join(rendered, "\n")
+}
+
 func metaLine(leftLabel, leftValue, rightLabel, rightValue string) string {
 	left := labelStyle.Render(leftLabel+":") + " " + valueStyle.Render(leftValue)
 	right := labelStyle.Render(rightLabel+":") + " " + valueStyle.Render(rightValue)
@@ -572,18 +661,25 @@ func clamp(value, low, high int) int {
 }
 
 var (
-	titleStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	statusStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	errorStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	itemStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	selectedStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
-	helpStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	detailRepoStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	detailTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
-	metaBoxStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Padding(0, 1)
-	labelStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	valueStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	linkStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Underline(true)
-	sectionStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	mutedStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	titleStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	statusStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	errorStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	itemStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	selectedStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
+	helpStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	detailRepoStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	detailTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
+	metaBoxStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Padding(0, 1)
+	labelStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	valueStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	linkStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Underline(true)
+	sectionStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	mutedStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	tabStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Padding(0, 1)
+	activeTabStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62")).Padding(0, 1)
+	fileHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
+	patchHunkStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("183"))
+	patchAddStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	patchDeleteStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	patchContextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 )

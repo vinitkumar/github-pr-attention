@@ -77,6 +77,47 @@ func TestRenderDetailContentPreservesFencedCode(t *testing.T) {
 	}
 }
 
+func TestRenderDetailContentShowsChangedFiles(t *testing.T) {
+	model := New(fakeClient{})
+	model.width = 100
+	model.height = 30
+	model.viewport.Width = 98
+	model.viewport.Height = 26
+	model.detailTab = tabChanges
+	model.detail = &github.PullRequestDetail{
+		PullRequest: github.PullRequest{
+			Owner:  "acme",
+			Repo:   "tool",
+			Number: 42,
+			Title:  "Render changes",
+			URL:    "https://github.com/acme/tool/pull/42",
+			Author: "octocat",
+		},
+		State:        "open",
+		BaseRef:      "main",
+		HeadRef:      "feature",
+		Additions:    1,
+		Deletions:    1,
+		ChangedFiles: 1,
+		Body:         "Body",
+	}
+	model.files = []github.PullRequestFile{{
+		Filename:  "internal/app/model.go",
+		Status:    "modified",
+		Additions: 1,
+		Deletions: 1,
+		Patch:     "@@ -1 +1 @@\n-old\n+new",
+	}}
+
+	content := model.renderDetailContent()
+	if !strings.Contains(content, "internal/app/model.go") {
+		t.Fatalf("expected changed file path, got:\n%s", content)
+	}
+	if !strings.Contains(content, "+new") {
+		t.Fatalf("expected rendered patch addition, got:\n%s", content)
+	}
+}
+
 type fakeClient struct{}
 
 func (fakeClient) ListAttentionPRs(context.Context) ([]github.PullRequest, error) {
@@ -85,6 +126,10 @@ func (fakeClient) ListAttentionPRs(context.Context) ([]github.PullRequest, error
 
 func (fakeClient) GetPullRequest(context.Context, string, string, int) (github.PullRequestDetail, error) {
 	return github.PullRequestDetail{}, nil
+}
+
+func (fakeClient) GetPullRequestFiles(context.Context, string, string, int) ([]github.PullRequestFile, error) {
+	return nil, nil
 }
 
 func (fakeClient) AddComment(context.Context, string, string, int, string) error {

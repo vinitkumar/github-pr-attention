@@ -78,6 +78,41 @@ func TestAddCommentPostsIssueComment(t *testing.T) {
 	}
 }
 
+func TestGetPullRequestFilesFetchesChangedFiles(t *testing.T) {
+	var requestPath, page string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		page = r.URL.Query().Get("page")
+		writeJSON(t, w, []pullFileResponse{{
+			Filename:  "internal/app/model.go",
+			Status:    "modified",
+			Additions: 12,
+			Deletions: 3,
+			Changes:   15,
+			Patch:     "@@ -1 +1 @@\n-old\n+new",
+		}})
+	}))
+	defer server.Close()
+
+	client := NewClientWithBaseURL("token", server.URL, server.Client())
+	files, err := client.GetPullRequestFiles(context.Background(), "acme", "tool", 42)
+	if err != nil {
+		t.Fatalf("GetPullRequestFiles returned error: %v", err)
+	}
+	if requestPath != "/repos/acme/tool/pulls/42/files" {
+		t.Fatalf("path = %s", requestPath)
+	}
+	if page != "1" {
+		t.Fatalf("page = %s", page)
+	}
+	if len(files) != 1 {
+		t.Fatalf("files = %d", len(files))
+	}
+	if files[0].Patch == "" || files[0].Filename != "internal/app/model.go" {
+		t.Fatalf("unexpected file: %#v", files[0])
+	}
+}
+
 func TestSubmitReviewValidatesRequestChangesBody(t *testing.T) {
 	client := NewClientWithBaseURL("token", "http://example.test", nil)
 	err := client.SubmitReview(context.Background(), "acme", "tool", 42, ReviewRequestChanges, " ")

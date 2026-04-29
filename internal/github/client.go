@@ -17,6 +17,7 @@ import (
 
 const defaultBaseURL = "https://api.github.com"
 const searchPageLimit = 10
+const pullFilesPageLimit = 10
 
 type Client struct {
 	baseURL    string
@@ -173,6 +174,39 @@ func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, number 
 	}, nil
 }
 
+func (c *Client) GetPullRequestFiles(ctx context.Context, owner, repo string, number int) ([]PullRequestFile, error) {
+	files := []PullRequestFile{}
+	for page := 1; page <= pullFilesPageLimit; page++ {
+		endpoint, err := url.Parse(c.repoEndpoint(owner, repo, "pulls", fmt.Sprint(number), "files"))
+		if err != nil {
+			return nil, err
+		}
+		query := endpoint.Query()
+		query.Set("per_page", "100")
+		query.Set("page", fmt.Sprint(page))
+		endpoint.RawQuery = query.Encode()
+
+		var response []pullFileResponse
+		if err := c.do(ctx, http.MethodGet, endpoint.String(), nil, &response); err != nil {
+			return nil, err
+		}
+		for _, item := range response {
+			files = append(files, PullRequestFile{
+				Filename:  item.Filename,
+				Status:    item.Status,
+				Additions: item.Additions,
+				Deletions: item.Deletions,
+				Changes:   item.Changes,
+				Patch:     item.Patch,
+			})
+		}
+		if len(response) < 100 {
+			break
+		}
+	}
+	return files, nil
+}
+
 func (c *Client) AddComment(ctx context.Context, owner, repo string, number int, body string) error {
 	body = strings.TrimSpace(body)
 	if body == "" {
@@ -302,4 +336,13 @@ type pullResponse struct {
 
 type refObject struct {
 	Ref string `json:"ref"`
+}
+
+type pullFileResponse struct {
+	Filename  string `json:"filename"`
+	Status    string `json:"status"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	Changes   int    `json:"changes"`
+	Patch     string `json:"patch"`
 }
