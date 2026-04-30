@@ -61,6 +61,9 @@ type Model struct {
 	width      int
 	height     int
 	loading    bool
+	detailBusy bool
+	filesBusy  bool
+	detailReq  int
 	status     string
 	err        error
 	textarea   textarea.Model
@@ -77,9 +80,15 @@ type listLoadedMsg struct {
 }
 
 type detailLoadedMsg struct {
-	detail github.PullRequestDetail
-	files  []github.PullRequestFile
-	err    error
+	requestID int
+	detail    github.PullRequestDetail
+	err       error
+}
+
+type filesLoadedMsg struct {
+	requestID int
+	files     []github.PullRequestFile
+	err       error
 }
 
 type actionDoneMsg struct {
@@ -135,14 +144,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = m.listStatus()
 		return m, nil
 	case detailLoadedMsg:
-		m.loading = false
+		if msg.requestID != m.detailReq || !m.detailBusy {
+			return m, nil
+		}
+		m.detailBusy = false
+		m.loading = m.detailBusy || m.filesBusy
 		m.err = msg.err
 		if msg.err != nil {
+			m.filesBusy = false
+			m.loading = false
 			m.status = "Could not load PR detail"
 			return m, nil
 		}
 		m.detail = &msg.detail
-		m.files = msg.files
 		m.detailTab = tabDescription
 		m.mode = modeDetail
 		m.viewport.Width = max(20, m.width-2)
@@ -150,6 +164,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.SetContent(m.renderDetailContent())
 		m.viewport.GotoTop()
 		m.status = "Detail loaded"
+		if m.filesBusy {
+			m.status = "Detail loaded; loading changes..."
+		}
+		return m, nil
+	case filesLoadedMsg:
+		if msg.requestID != m.detailReq || (!m.detailBusy && m.detail == nil) {
+			return m, nil
+		}
+		m.filesBusy = false
+		m.loading = m.detailBusy || m.filesBusy
+		if msg.err != nil {
+			m.err = msg.err
+			if m.detail != nil {
+				m.status = "Could not load changed files"
+			}
+			return m, nil
+		}
+		m.files = msg.files
+		if m.detail != nil {
+			m.viewport.SetContent(m.renderDetailContent())
+			if m.detailTab == tabChanges {
+				m.status = fmt.Sprintf("%d changed files", len(m.files))
+			} else {
+				m.status = "Detail loaded"
+			}
+		}
 		return m, nil
 	case actionDoneMsg:
 		m.loading = false
@@ -211,12 +251,17 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeDetail {
 		switch msg.String() {
 		case "tab":
-			m.toggleDetailTab()
+			if m.detail != nil {
+				m.toggleDetailTab()
+			}
 			return m, nil
-		case "esc":
+		case "esc", "b", "backspace", "left":
 			m.mode = modeList
 			m.detail = nil
 			m.files = nil
+			m.detailBusy = false
+			m.filesBusy = false
+			m.loading = false
 			m.status = m.listStatus()
 			return m, nil
 		case "j", "down", "k", "up", "pgdown", "pgup", "home", "end":
@@ -243,9 +288,15 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		if pr, ok := m.currentPR(); ok {
+			m.detailReq++
 			m.loading = true
+			m.detailBusy = true
+			m.filesBusy = true
 			m.status = "Loading detail..."
-			return m, m.loadDetail(pr)
+			m.mode = modeDetail
+			m.detail = nil
+			m.files = nil
+			return m, tea.Batch(m.loadDetail(pr, m.detailReq), m.loadFiles(pr, m.detailReq))
 		}
 	case "esc":
 		if m.mode == modeDetail {
@@ -369,7 +420,7 @@ func (m Model) View() string {
 		footer = helpStyle.Render("type filter  enter apply  ctrl+u clear  esc close filter")
 	}
 	if m.mode == modeDetail {
-		footer = helpStyle.Render("tab description/changes  j/k scroll  esc back  o open  c comment  a approve  x changes  m merge  d close  q quit")
+		footer = helpStyle.Render("tab description/changes  j/k scroll  esc/b back  o open  c comment  a approve  x changes  m merge  d close  q quit")
 	}
 	if m.mode == modeCompose {
 		footer = helpStyle.Render("ctrl+s submit  esc cancel")
@@ -410,7 +461,7 @@ func (m Model) listView() string {
 }
 
 func (m Model) detailView() string {
-	if m.loading && m.detail == nil {
+	if m.detailBusy && m.detail == nil {
 		return "\n  Loading detail..."
 	}
 	if m.detail == nil {
@@ -521,15 +572,21 @@ func (m Model) loadList() tea.Cmd {
 	}
 }
 
-func (m Model) loadDetail(pr github.PullRequest) tea.Cmd {
+func (m Model) loadDetail(pr github.PullRequest, requestID int) tea.Cmd {
 	return func() tea.Msg {
 		detail, err := m.client.GetPullRequest(context.Background(), pr.Owner, pr.Repo, pr.Number)
 		if err != nil {
-			return detailLoadedMsg{err: err}
+			return detailLoadedMsg{requestID: requestID, err: err}
 		}
-		files, err := m.client.GetPullRequestFiles(context.Background(), pr.Owner, pr.Repo, pr.Number)
 		detail.Reasons = pr.Reasons
-		return detailLoadedMsg{detail: detail, files: files, err: err}
+		return detailLoadedMsg{requestID: requestID, detail: detail}
+	}
+}
+
+func (m Model) loadFiles(pr github.PullRequest, requestID int) tea.Cmd {
+	return func() tea.Msg {
+		files, err := m.client.GetPullRequestFiles(context.Background(), pr.Owner, pr.Repo, pr.Number)
+		return filesLoadedMsg{requestID: requestID, files: files, err: err}
 	}
 }
 

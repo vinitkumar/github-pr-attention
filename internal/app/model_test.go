@@ -33,9 +33,157 @@ func TestEnterLoadsSelectedDetail(t *testing.T) {
 	model.prs = []github.PullRequest{{Owner: "acme", Repo: "tool", Number: 42}}
 	model.loading = false
 
-	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected detail load command")
+	}
+	m := updated.(Model)
+	if m.mode != modeDetail {
+		t.Fatal("expected detail mode while detail loads")
+	}
+	if !m.detailBusy || !m.filesBusy {
+		t.Fatalf("expected detail and file loads to be busy, detailBusy=%v filesBusy=%v", m.detailBusy, m.filesBusy)
+	}
+	if m.detail != nil {
+		t.Fatal("expected detail to be empty until the detail request completes")
+	}
+}
+
+func TestEscCancelsPendingDetailLoad(t *testing.T) {
+	model := New(fakeClient{})
+	model.prs = []github.PullRequest{{Owner: "acme", Repo: "tool", Number: 42}}
+	model.loading = false
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m := updated.(Model)
+	requestID := m.detailReq
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.mode != modeList {
+		t.Fatal("expected esc to return to list while detail loads")
+	}
+	if m.loading || m.detailBusy || m.filesBusy {
+		t.Fatalf("expected pending load state to be cleared, loading=%v detailBusy=%v filesBusy=%v", m.loading, m.detailBusy, m.filesBusy)
+	}
+
+	updated, _ = m.Update(detailLoadedMsg{
+		requestID: requestID,
+		detail: github.PullRequestDetail{PullRequest: github.PullRequest{
+			Owner: "acme", Repo: "tool", Number: 42, Title: "Late detail",
+		}},
+	})
+	m = updated.(Model)
+	if m.mode != modeList {
+		t.Fatal("late detail response should not reopen detail mode")
+	}
+	if m.detail != nil {
+		t.Fatal("late detail response should be ignored")
+	}
+}
+
+func TestDetailBackKeysReturnToList(t *testing.T) {
+	tests := []struct {
+		name string
+		key  tea.KeyMsg
+	}{
+		{name: "b", key: tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")}},
+		{name: "backspace", key: tea.KeyMsg{Type: tea.KeyBackspace}},
+		{name: "left", key: tea.KeyMsg{Type: tea.KeyLeft}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := New(fakeClient{})
+			model.mode = modeDetail
+			model.detail = &github.PullRequestDetail{PullRequest: github.PullRequest{
+				Owner: "acme", Repo: "tool", Number: 42,
+			}}
+			model.files = []github.PullRequestFile{{Filename: "internal/app/model.go"}}
+			model.detailBusy = true
+			model.filesBusy = true
+			model.loading = true
+
+			updated, cmd := model.Update(tt.key)
+			if cmd != nil {
+				t.Fatal("back key should not start a command")
+			}
+			m := updated.(Model)
+			if m.mode != modeList {
+				t.Fatal("expected back key to return to list")
+			}
+			if m.detail != nil || m.files != nil {
+				t.Fatal("expected detail state to be cleared")
+			}
+			if m.loading || m.detailBusy || m.filesBusy {
+				t.Fatalf("expected load state to be cleared, loading=%v detailBusy=%v filesBusy=%v", m.loading, m.detailBusy, m.filesBusy)
+			}
+		})
+	}
+}
+
+func TestDetailMetadataCanRenderBeforeFilesLoad(t *testing.T) {
+	model := New(fakeClient{})
+	model.prs = []github.PullRequest{{Owner: "acme", Repo: "tool", Number: 42}}
+	model.width = 100
+	model.height = 30
+	model.loading = false
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m := updated.(Model)
+	requestID := m.detailReq
+
+	updated, _ = m.Update(detailLoadedMsg{
+		requestID: requestID,
+		detail: github.PullRequestDetail{PullRequest: github.PullRequest{
+			Owner: "acme", Repo: "tool", Number: 42, Title: "Render early",
+		}},
+	})
+	m = updated.(Model)
+	if m.detail == nil {
+		t.Fatal("expected detail metadata to be visible before files complete")
+	}
+	if !m.filesBusy {
+		t.Fatal("expected file load to continue in the background")
+	}
+	if m.status != "Detail loaded; loading changes..." {
+		t.Fatalf("status = %q", m.status)
+	}
+
+	updated, _ = m.Update(filesLoadedMsg{
+		requestID: requestID,
+		files: []github.PullRequestFile{{
+			Filename: "internal/app/model.go",
+			Status:   "modified",
+		}},
+	})
+	m = updated.(Model)
+	if m.loading || m.filesBusy {
+		t.Fatalf("expected loading to finish, loading=%v filesBusy=%v", m.loading, m.filesBusy)
+	}
+	if len(m.files) != 1 {
+		t.Fatalf("files = %d", len(m.files))
+	}
+}
+
+func TestDetailErrorClearsBackgroundFileLoad(t *testing.T) {
+	model := New(fakeClient{})
+	model.prs = []github.PullRequest{{Owner: "acme", Repo: "tool", Number: 42}}
+	model.loading = false
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m := updated.(Model)
+
+	updated, _ = m.Update(detailLoadedMsg{
+		requestID: m.detailReq,
+		err:       errors.New("github unavailable"),
+	})
+	m = updated.(Model)
+	if m.loading || m.detailBusy || m.filesBusy {
+		t.Fatalf("expected failed detail load to stop all loading state, loading=%v detailBusy=%v filesBusy=%v", m.loading, m.detailBusy, m.filesBusy)
+	}
+	if m.status != "Could not load PR detail" {
+		t.Fatalf("status = %q", m.status)
 	}
 }
 

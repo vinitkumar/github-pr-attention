@@ -30,6 +30,7 @@ Override the install location with `LOCAL_BIN=/path/to/bin make build`.
 - `j` / `k` or arrow keys: move selection
 - `/`: filter the PR list; press `enter` to apply, `ctrl+u` to clear while filtering
 - `enter`: open PR details
+- `esc`, `b`, `backspace`, or left arrow in detail view: return to the list
 - `tab` in detail view: switch between PR description and changed files
 - `j` / `k` in detail view: scroll PR description
 - `r`: refresh inbox
