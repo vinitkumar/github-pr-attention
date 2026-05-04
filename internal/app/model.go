@@ -12,6 +12,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/ansi"
+	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/vinitkumar/github-pr-attention/internal/github"
@@ -967,7 +969,7 @@ func emptyDash(value string) string {
 
 func renderMarkdown(value string, width int) string {
 	renderer, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStyles(markdownStyle()),
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {
@@ -978,6 +980,60 @@ func renderMarkdown(value string, width int) string {
 		return wrapText(value, width, 200)
 	}
 	return strings.TrimRight(rendered, "\n")
+}
+
+func markdownStyle() ansi.StyleConfig {
+	style := styles.LightStyleConfig
+	style.Document.Color = stringPointer("#1F2937")
+	style.Paragraph.Color = stringPointer("#1F2937")
+	style.Text.Color = stringPointer("#1F2937")
+	style.Heading.Color = stringPointer("#0369A1")
+	style.H1.Color = stringPointer("#0F172A")
+	style.H1.BackgroundColor = stringPointer("#DCEEFF")
+	style.H2.Color = stringPointer("#0369A1")
+	style.H3.Color = stringPointer("#0F766E")
+	style.H4.Color = stringPointer("#334155")
+	style.H5.Color = stringPointer("#334155")
+	style.H6.Color = stringPointer("#64748B")
+	style.Item.Color = stringPointer("#475569")
+	style.Enumeration.Color = stringPointer("#475569")
+	style.Link.Color = stringPointer("#2563EB")
+	style.LinkText.Color = stringPointer("#075985")
+	style.Code.Color = stringPointer("#991B1B")
+	style.Code.BackgroundColor = stringPointer("#F1F5F9")
+	style.CodeBlock.Color = stringPointer("#334155")
+	style.CodeBlock.Chroma = nil
+	style.CodeBlock.Theme = ""
+	style.BlockQuote.Color = stringPointer("#475569")
+	style.HorizontalRule.Color = stringPointer("#CBD5E1")
+
+	if lipgloss.HasDarkBackground() {
+		style = styles.DarkStyleConfig
+		style.Document.Color = stringPointer("#E5E7EB")
+		style.Paragraph.Color = stringPointer("#E5E7EB")
+		style.Text.Color = stringPointer("#E5E7EB")
+		style.Heading.Color = stringPointer("#67E8F9")
+		style.H1.Color = stringPointer("#DDF7FF")
+		style.H1.BackgroundColor = stringPointer("#123B46")
+		style.H2.Color = stringPointer("#67E8F9")
+		style.H3.Color = stringPointer("#5EEAD4")
+		style.H4.Color = stringPointer("#CBD5E1")
+		style.H5.Color = stringPointer("#CBD5E1")
+		style.H6.Color = stringPointer("#94A3B8")
+		style.Item.Color = stringPointer("#CBD5E1")
+		style.Enumeration.Color = stringPointer("#CBD5E1")
+		style.Link.Color = stringPointer("#93C5FD")
+		style.LinkText.Color = stringPointer("#BFDBFE")
+		style.Code.Color = stringPointer("#FCA5A5")
+		style.Code.BackgroundColor = stringPointer("#263241")
+		style.CodeBlock.Color = stringPointer("#CBD5E1")
+		style.CodeBlock.Chroma = nil
+		style.CodeBlock.Theme = ""
+		style.BlockQuote.Color = stringPointer("#CBD5E1")
+		style.HorizontalRule.Color = stringPointer("#334155")
+	}
+
+	return style
 }
 
 func renderTabs(active detailTab) string {
@@ -1186,38 +1242,71 @@ func clamp(value, low, high int) int {
 	return max(low, min(value, high))
 }
 
+func adaptive(light string, dark string) lipgloss.AdaptiveColor {
+	return lipgloss.AdaptiveColor{Light: light, Dark: dark}
+}
+
+func stringPointer(value string) *string {
+	return &value
+}
+
 var (
-	titleStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
-	headerBarStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("23")).Padding(0, 1)
-	statusStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("151"))
-	errorStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Background(lipgloss.Color("52")).Padding(0, 1)
-	rowStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Padding(0, 1)
-	selectedRowStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("58")).Padding(0, 1)
-	listIndexStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	itemTitleStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	repoStyle         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("116"))
-	helpStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+	colorText        = adaptive("#1F2937", "#E5E7EB")
+	colorTextStrong  = adaptive("#0F172A", "#F8FAFC")
+	colorMuted       = adaptive("#64748B", "#94A3B8")
+	colorSubtle      = adaptive("#94A3B8", "#64748B")
+	colorBorder      = adaptive("#CBD5E1", "#334155")
+	colorHeaderFG    = adaptive("#113A5C", "#DDF7FF")
+	colorHeaderBG    = adaptive("#DCEEFF", "#123B46")
+	colorStatus      = adaptive("#0F766E", "#8EE6D2")
+	colorAccent      = adaptive("#0F766E", "#5EEAD4")
+	colorAccentSoft  = adaptive("#D9EDEB", "#164E63")
+	colorPillFG      = adaptive("#075985", "#BFDBFE")
+	colorPillBG      = adaptive("#E0F2FE", "#1E3A5F")
+	colorBadgeFG     = adaptive("#6B21A8", "#F5D0FE")
+	colorBadgeBG     = adaptive("#F3E8FF", "#4C1D95")
+	colorActionFG    = adaptive("#243B53", "#D7E0EA")
+	colorActionBG    = adaptive("#E8EEF5", "#263241")
+	colorLink        = adaptive("#2563EB", "#93C5FD")
+	colorSection     = adaptive("#0369A1", "#67E8F9")
+	colorErrorFG     = adaptive("#991B1B", "#FECACA")
+	colorErrorBG     = adaptive("#FEE2E2", "#7F1D1D")
+	colorFile        = adaptive("#0369A1", "#67E8F9")
+	colorPatchHunk   = adaptive("#7C3AED", "#C4B5FD")
+	colorPatchAdd    = adaptive("#15803D", "#4ADE80")
+	colorPatchDelete = adaptive("#B91C1C", "#F87171")
+
+	titleStyle        = lipgloss.NewStyle().Bold(true).Foreground(colorTextStrong)
+	headerBarStyle    = lipgloss.NewStyle().Foreground(colorHeaderFG).Background(colorHeaderBG).Padding(0, 1)
+	statusStyle       = lipgloss.NewStyle().Foreground(colorStatus)
+	errorStyle        = lipgloss.NewStyle().Foreground(colorErrorFG).Background(colorErrorBG).Padding(0, 1)
+	rowStyle          = lipgloss.NewStyle().Foreground(colorText).Padding(0, 1)
+	selectedRowStyle  = lipgloss.NewStyle().Foreground(colorTextStrong).Background(colorAccentSoft).Padding(0, 1)
+	listIndexStyle    = lipgloss.NewStyle().Foreground(colorSubtle)
+	itemTitleStyle    = lipgloss.NewStyle().Foreground(colorText)
+	repoStyle         = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+	helpStyle         = lipgloss.NewStyle().Foreground(colorMuted)
 	footerBarStyle    = lipgloss.NewStyle().Padding(0, 1)
-	summaryStyle      = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, true, false).BorderForeground(lipgloss.Color("238")).Padding(0, 1, 1, 1)
-	statPillStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("236")).Padding(0, 1).MarginRight(1)
-	emptyStateStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("238")).Padding(1, 2)
-	detailRepoStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("116"))
-	detailTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
-	metaBoxStyle      = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("238")).Padding(0, 1)
-	labelStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	valueStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	linkStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Underline(true)
-	sectionStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("222"))
-	mutedStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	tabStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Padding(0, 1)
-	activeTabStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("58")).Padding(0, 1)
-	reasonBadgeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("95")).Padding(0, 1)
-	actionPillStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236")).Padding(0, 1).MarginRight(1)
-	composeTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
-	composeBoxStyle   = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("238")).Padding(1, 2)
-	fileHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
-	patchHunkStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("183"))
-	patchAddStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	patchDeleteStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	patchContextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	summaryStyle      = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, true, false).BorderForeground(colorBorder).Padding(0, 1, 1, 1)
+	statPillStyle     = lipgloss.NewStyle().Foreground(colorPillFG).Background(colorPillBG).Padding(0, 1).MarginRight(1)
+	emptyStateStyle   = lipgloss.NewStyle().Foreground(colorMuted).Border(lipgloss.NormalBorder()).BorderForeground(colorBorder).Padding(1, 2)
+	detailRepoStyle   = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+	detailTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(colorTextStrong)
+	metaBoxStyle      = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(colorBorder).Padding(0, 1)
+	labelStyle        = lipgloss.NewStyle().Foreground(colorMuted)
+	valueStyle        = lipgloss.NewStyle().Foreground(colorText)
+	linkStyle         = lipgloss.NewStyle().Foreground(colorLink).Underline(true)
+	sectionStyle      = lipgloss.NewStyle().Bold(true).Foreground(colorSection)
+	mutedStyle        = lipgloss.NewStyle().Foreground(colorMuted)
+	tabStyle          = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 1)
+	activeTabStyle    = lipgloss.NewStyle().Bold(true).Foreground(colorTextStrong).Background(colorAccentSoft).Padding(0, 1)
+	reasonBadgeStyle  = lipgloss.NewStyle().Foreground(colorBadgeFG).Background(colorBadgeBG).Padding(0, 1)
+	actionPillStyle   = lipgloss.NewStyle().Foreground(colorActionFG).Background(colorActionBG).Padding(0, 1).MarginRight(1)
+	composeTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(colorTextStrong)
+	composeBoxStyle   = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(colorBorder).Padding(1, 2)
+	fileHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(colorFile)
+	patchHunkStyle    = lipgloss.NewStyle().Foreground(colorPatchHunk)
+	patchAddStyle     = lipgloss.NewStyle().Foreground(colorPatchAdd)
+	patchDeleteStyle  = lipgloss.NewStyle().Foreground(colorPatchDelete)
+	patchContextStyle = lipgloss.NewStyle().Foreground(colorText)
 )
