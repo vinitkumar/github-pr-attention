@@ -454,7 +454,7 @@ func (m Model) listView() string {
 			prefix = "> "
 			style = selectedStyle
 		}
-		line := fmt.Sprintf("%s%s #%d  %s  [%s]", prefix, pr.FullName(), pr.Number, pr.Title, reasons(pr.Reasons))
+		line := fmt.Sprintf("%s%s #%d  %s (%s) [%s]", prefix, pr.FullName(), pr.Number, pr.Title, pr.CreatedAt.Format("Mon, Jan 2, 2006 3:04 PM"), reasons(pr.Reasons))
 		lines = append(lines, style.Width(max(20, m.width-2)).Render(truncate(line, max(20, m.width-2))))
 	}
 	return "\n" + strings.Join(lines, "\n")
