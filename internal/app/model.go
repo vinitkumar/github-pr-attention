@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -55,6 +56,7 @@ type Model struct {
 	mode       viewMode
 	prs        []github.PullRequest
 	selected   int
+	listOffset int
 	detail     *github.PullRequestDetail
 	files      []github.PullRequestFile
 	detailTab  detailTab
@@ -125,6 +127,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.textarea.SetWidth(max(20, msg.Width-6))
 		m.viewport.Width = max(20, msg.Width-2)
 		m.viewport.Height = max(4, msg.Height-4)
+		m.clampListViewport()
 		if m.detail != nil {
 			m.viewport.SetContent(m.renderDetailContent())
 		}
@@ -141,6 +144,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.selected >= len(filtered) {
 			m.selected = max(0, len(filtered)-1)
 		}
+		m.clampListViewport()
 		m.status = m.listStatus()
 		return m, nil
 	case detailLoadedMsg:
@@ -282,9 +286,33 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.selected < len(m.filteredPRs())-1 {
 			m.selected++
 		}
+		m.ensureSelectionVisible()
 	case "k", "up":
 		if m.selected > 0 {
 			m.selected--
+		}
+		m.ensureSelectionVisible()
+	case "pgdown":
+		filtered := m.filteredPRs()
+		if len(filtered) > 0 {
+			m.selected = min(len(filtered)-1, m.selected+m.listVisibleRows(filtered))
+			m.ensureSelectionVisible()
+		}
+	case "pgup":
+		if len(m.filteredPRs()) > 0 {
+			m.selected = max(0, m.selected-m.listVisibleRows(m.filteredPRs()))
+			m.ensureSelectionVisible()
+		}
+	case "home":
+		if len(m.filteredPRs()) > 0 {
+			m.selected = 0
+			m.listOffset = 0
+		}
+	case "end":
+		filtered := m.filteredPRs()
+		if len(filtered) > 0 {
+			m.selected = len(filtered) - 1
+			m.ensureSelectionVisible()
 		}
 	case "enter":
 		if pr, ok := m.currentPR(); ok {
@@ -379,16 +407,19 @@ func (m Model) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.filter != "" {
 			m.filter = m.filter[:len(m.filter)-1]
 			m.selected = 0
+			m.listOffset = 0
 		}
 		m.status = "/" + m.filter
 	case "ctrl+u":
 		m.filter = ""
 		m.selected = 0
+		m.listOffset = 0
 		m.status = "/"
 	default:
 		if msg.Type == tea.KeyRunes {
 			m.filter += string(msg.Runes)
 			m.selected = 0
+			m.listOffset = 0
 			m.status = "/" + m.filter
 		}
 	}
@@ -398,11 +429,6 @@ func (m Model) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	if m.width == 0 {
 		return "Loading..."
-	}
-
-	header := titleStyle.Render("GitHub PR Attention") + " " + statusStyle.Render(m.status)
-	if m.err != nil {
-		header += "\n" + errorStyle.Render(m.err.Error())
 	}
 
 	body := ""
@@ -415,7 +441,7 @@ func (m Model) View() string {
 		body = m.composeView()
 	}
 
-	footer := helpStyle.Render("j/k move  / filter  enter detail  r refresh  o open  c comment  a approve  x changes  m merge  M merge list  d close  q quit")
+	footer := helpStyle.Render("j/k move  pgup/pgdown page  home/end jump  / filter  enter detail  r refresh  o open  c comment  a approve  x changes  m merge  M merge list  d close  q quit")
 	if m.filtering {
 		footer = helpStyle.Render("type filter  enter apply  ctrl+u clear  esc close filter")
 	}
@@ -426,38 +452,45 @@ func (m Model) View() string {
 		footer = helpStyle.Render("ctrl+s submit  esc cancel")
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.headerView(),
+		body,
+		footerBarStyle.Width(max(20, m.width-2)).Render(footer),
+	)
 }
 
 func (m Model) listView() string {
 	if m.loading && len(m.prs) == 0 {
-		return "\n  Loading..."
+		return "\n" + emptyStateStyle.Width(max(20, m.width-2)).Render("Syncing your review inbox...")
 	}
 	if len(m.prs) == 0 {
-		return "\n  No open pull requests currently need your attention."
+		return "\n" + emptyStateStyle.Width(max(20, m.width-2)).Render("Inbox clear. No open pull requests currently need your attention.")
 	}
 	filtered := m.filteredPRs()
 	if len(filtered) == 0 {
-		return "\n  No pull requests match /" + m.filter
+		return "\n" + lipgloss.JoinVertical(
+			lipgloss.Left,
+			m.inboxSummary(filtered),
+			emptyStateStyle.Width(max(20, m.width-2)).Render("No pull requests match /"+m.filter),
+		)
 	}
 
-	available := max(4, m.height-5)
-	start := clamp(m.selected-available/2, 0, max(0, len(filtered)-available))
+	available := m.listVisibleRows(filtered)
+	m.clampListViewport()
+	start := m.listOffset
 	end := min(len(filtered), start+available)
 
 	lines := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
 		pr := filtered[i]
-		prefix := "  "
-		style := itemStyle
-		if i == m.selected {
-			prefix = "> "
-			style = selectedStyle
-		}
-		line := fmt.Sprintf("%s%s #%d  %s (%s) [%s]", prefix, pr.FullName(), pr.Number, pr.Title, pr.CreatedAt.Format("Mon, Jan 2, 2006 3:04 PM"), reasons(pr.Reasons))
-		lines = append(lines, style.Width(max(20, m.width-2)).Render(truncate(line, max(20, m.width-2))))
+		lines = append(lines, m.renderPRRow(pr, i == m.selected, i+1, len(filtered)))
 	}
-	return "\n" + strings.Join(lines, "\n")
+	return "\n" + lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.inboxSummary(filtered),
+		strings.Join(lines, "\n"),
+	)
 }
 
 func (m Model) detailView() string {
@@ -478,6 +511,7 @@ func (m Model) renderDetailContent() string {
 
 	d := m.detail
 	bodyWidth := max(32, m.viewport.Width-4)
+	contentWidth := max(32, m.viewport.Width-2)
 	body := renderMarkdown(d.Body, bodyWidth)
 	if strings.TrimSpace(body) == "" {
 		body = mutedStyle.Render("No pull request description.")
@@ -485,8 +519,9 @@ func (m Model) renderDetailContent() string {
 
 	header := lipgloss.JoinVertical(
 		lipgloss.Left,
-		detailRepoStyle.Render(fmt.Sprintf("%s #%d", d.FullName(), d.Number)),
+		detailRepoStyle.Render(fmt.Sprintf("%s #%d", d.FullName(), d.Number))+" "+reasonBadgeStyle.Render(reasonSummary(d.Reasons)),
 		detailTitleStyle.Width(bodyWidth).Render(d.Title),
+		m.detailActionStrip(),
 	)
 
 	meta := lipgloss.JoinVertical(
@@ -505,17 +540,39 @@ func (m Model) renderDetailContent() string {
 		content = renderFiles(m.files, bodyWidth)
 	}
 
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
+	metaPanel := metaBoxStyle.Width(bodyWidth).Render(meta)
+	healthPanel := metaBoxStyle.Width(bodyWidth).Render(renderHealthPanel(d))
+	if contentWidth >= 72 {
+		panelWidth := max(32, contentWidth/2-1)
+		metaPanel = lipgloss.JoinHorizontal(
+			lipgloss.Top,
+			metaBoxStyle.Width(panelWidth).Render(meta),
+			" ",
+			metaBoxStyle.Width(panelWidth).Render(renderHealthPanel(d)),
+		)
+		healthPanel = ""
+	}
+
+	sections := []string{
 		header,
 		"",
-		metaBoxStyle.Width(bodyWidth).Render(meta),
+		metaPanel,
+	}
+	if healthPanel != "" {
+		sections = append(sections, "", healthPanel)
+	}
+	sections = append(sections,
 		"",
 		linkStyle.Render(d.URL),
 		"",
 		renderTabs(m.detailTab),
 		sectionStyle.Render(section),
 		content,
+	)
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		sections...,
 	)
 }
 
@@ -527,7 +584,16 @@ func (m Model) composeView() string {
 	if m.composing == composeRequestChanges {
 		label = "Request changes"
 	}
-	return "\n" + selectedStyle.Render(label) + "\n" + m.textarea.View()
+	target := "Selected pull request"
+	if pr, ok := m.activePR(); ok {
+		target = fmt.Sprintf("%s #%d", pr.FullName(), pr.Number)
+	}
+	header := lipgloss.JoinVertical(
+		lipgloss.Left,
+		composeTitleStyle.Render(label),
+		mutedStyle.Render(target),
+	)
+	return "\n" + composeBoxStyle.Width(max(32, m.width-4)).Render(lipgloss.JoinVertical(lipgloss.Left, header, "", m.textarea.View()))
 }
 
 func (m Model) startCompose(action composeAction, label string) (tea.Model, tea.Cmd) {
@@ -681,11 +747,155 @@ func (m Model) filteredPRs() []github.PullRequest {
 	return filtered
 }
 
+func (m Model) listVisibleRows(filtered []github.PullRequest) int {
+	if m.height <= 0 {
+		return max(1, len(filtered))
+	}
+
+	summaryHeight := lipgloss.Height(m.inboxSummary(filtered))
+	headerHeight := lipgloss.Height(m.headerView())
+	footerHeight := 1
+	leadingBlankLine := 1
+	rowHeight := 2
+
+	availableLines := m.height - headerHeight - footerHeight - leadingBlankLine - summaryHeight
+	return clamp(availableLines/rowHeight, 1, max(1, len(filtered)))
+}
+
+func (m *Model) clampListViewport() {
+	filtered := m.filteredPRs()
+	if len(filtered) == 0 {
+		m.selected = 0
+		m.listOffset = 0
+		return
+	}
+	m.selected = clamp(m.selected, 0, len(filtered)-1)
+	visibleRows := m.listVisibleRows(filtered)
+	maxOffset := max(0, len(filtered)-visibleRows)
+	m.listOffset = clamp(m.listOffset, 0, maxOffset)
+}
+
+func (m *Model) ensureSelectionVisible() {
+	filtered := m.filteredPRs()
+	if len(filtered) == 0 {
+		m.selected = 0
+		m.listOffset = 0
+		return
+	}
+	m.selected = clamp(m.selected, 0, len(filtered)-1)
+	visibleRows := m.listVisibleRows(filtered)
+	if m.selected < m.listOffset {
+		m.listOffset = m.selected
+	}
+	if m.selected >= m.listOffset+visibleRows {
+		m.listOffset = m.selected - visibleRows + 1
+	}
+	m.clampListViewport()
+}
+
 func (m Model) listStatus() string {
 	if strings.TrimSpace(m.filter) == "" {
 		return fmt.Sprintf("%d PRs need attention", len(m.prs))
 	}
 	return fmt.Sprintf("%d/%d PRs match /%s", len(m.filteredPRs()), len(m.prs), m.filter)
+}
+
+func (m Model) headerView() string {
+	width := max(20, m.width-2)
+	left := titleStyle.Render("PR Attention")
+	mode := "Inbox"
+	switch m.mode {
+	case modeDetail:
+		mode = "Review"
+	case modeCompose:
+		mode = "Compose"
+	}
+
+	status := statusStyle.Render(mode + " / " + m.status)
+	header := lipgloss.JoinHorizontal(lipgloss.Center, left, "  ", status)
+	if m.err != nil {
+		return lipgloss.JoinVertical(
+			lipgloss.Left,
+			headerBarStyle.Width(width).Render(header),
+			errorStyle.Width(width).Render(m.err.Error()),
+		)
+	}
+	return headerBarStyle.Width(width).Render(header)
+}
+
+func (m Model) inboxSummary(filtered []github.PullRequest) string {
+	width := max(20, m.width-2)
+	counts := map[github.AttentionReason]int{}
+	for _, pr := range m.prs {
+		for _, reason := range pr.Reasons {
+			counts[reason]++
+		}
+	}
+
+	filter := "all"
+	if strings.TrimSpace(m.filter) != "" {
+		filter = "/" + m.filter
+	}
+	selected := "-"
+	if pr, ok := m.currentPR(); ok {
+		selected = fmt.Sprintf("%s #%d", pr.FullName(), pr.Number)
+	}
+
+	stats := []string{
+		statPillStyle.Render(fmt.Sprintf("%d visible", len(filtered))),
+		statPillStyle.Render(fmt.Sprintf("%d total", len(m.prs))),
+		statPillStyle.Render(fmt.Sprintf("%d reviews", counts[github.ReasonReviewRequested])),
+		statPillStyle.Render(fmt.Sprintf("%d assigned", counts[github.ReasonAssigned])),
+		statPillStyle.Render("filter " + filter),
+	}
+	return summaryStyle.Width(width).Render(lipgloss.JoinVertical(
+		lipgloss.Left,
+		lipgloss.JoinHorizontal(lipgloss.Top, stats...),
+		mutedStyle.Render("Next up: "+truncate(selected, max(10, width-10))),
+	))
+}
+
+func (m Model) renderPRRow(pr github.PullRequest, selected bool, index int, total int) string {
+	width := max(20, m.width-2)
+	rowWidth := max(20, width-4)
+	position := fmt.Sprintf("%d/%d", index, total)
+	repo := truncate(fmt.Sprintf("%s #%d", pr.FullName(), pr.Number), max(12, rowWidth/3))
+	author := truncate(emptyDash(pr.Author), max(8, rowWidth/6))
+	reason := truncate(reasonSummary(pr.Reasons), max(10, rowWidth/5))
+	meta := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		repoStyle.Render(repo),
+		"  ",
+		mutedStyle.Render("by "+author),
+		"  ",
+		mutedStyle.Render("updated "+relativeTime(pr.UpdatedAt)),
+		"  ",
+		reasonBadgeStyle.Render(reason),
+	)
+	title := truncate(pr.Title, max(10, rowWidth-lipgloss.Width(position)-3))
+	line := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		listIndexStyle.Render(position),
+		"  ",
+		lipgloss.JoinVertical(lipgloss.Left, meta, itemTitleStyle.Width(rowWidth-7).Render(title)),
+	)
+	style := rowStyle
+	if selected {
+		style = selectedRowStyle
+	}
+	return style.Width(width).Render(line)
+}
+
+func (m Model) detailActionStrip() string {
+	actions := []string{
+		actionPillStyle.Render("o open"),
+		actionPillStyle.Render("c comment"),
+		actionPillStyle.Render("a approve"),
+		actionPillStyle.Render("x changes"),
+		actionPillStyle.Render("m merge"),
+		actionPillStyle.Render("d close"),
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, actions...)
 }
 
 func prSearchText(pr github.PullRequest) string {
@@ -724,6 +934,28 @@ func reasons(input []github.AttentionReason) string {
 		parts[i] = string(reason)
 	}
 	return strings.Join(parts, ", ")
+}
+
+func reasonSummary(input []github.AttentionReason) string {
+	if len(input) == 0 {
+		return "attention"
+	}
+	parts := make([]string, 0, len(input))
+	for _, reason := range input {
+		switch reason {
+		case github.ReasonReviewRequested:
+			parts = append(parts, "review")
+		case github.ReasonAssigned:
+			parts = append(parts, "assigned")
+		case github.ReasonMentioned:
+			parts = append(parts, "mentioned")
+		case github.ReasonAuthored:
+			parts = append(parts, "authored")
+		default:
+			parts = append(parts, string(reason))
+		}
+	}
+	return strings.Join(parts, " + ")
 }
 
 func emptyDash(value string) string {
@@ -778,6 +1010,62 @@ func renderFiles(files []github.PullRequestFile, width int) string {
 	return strings.Join(sections, "\n\n")
 }
 
+func renderHealthPanel(d *github.PullRequestDetail) string {
+	mergeable := "checking"
+	if d.Mergeable != nil {
+		mergeable = fmt.Sprint(*d.Mergeable)
+	}
+	lines := []string{
+		metaLine("CI", formatCIStatus(d.CIStatus), "Mergeable", mergeable),
+		metaLine("Age", relativeTime(d.CreatedAt), "Updated", relativeTime(d.UpdatedAt)),
+		changeMeter(d.Additions, d.Deletions),
+	}
+	if len(d.CIStatus.Checks) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, labelStyle.Render("Checks:"))
+		for _, check := range d.CIStatus.Checks[:min(len(d.CIStatus.Checks), 5)] {
+			lines = append(lines, checkLine(check))
+		}
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+}
+
+func checkLine(check github.CICheck) string {
+	state := string(ciStateForDisplay(check))
+	name := truncate(check.Name, 28)
+	return mutedStyle.Render("- ") + valueStyle.Render(state) + mutedStyle.Render("  "+name)
+}
+
+func ciStateForDisplay(check github.CICheck) github.CIState {
+	status := strings.ToLower(check.Status)
+	conclusion := strings.ToLower(check.Conclusion)
+	switch {
+	case status == "pending" || status == "queued" || status == "in_progress":
+		return github.CIStatePending
+	case conclusion == "success" || conclusion == "neutral" || conclusion == "skipped":
+		return github.CIStateSuccess
+	case conclusion == "failure" || conclusion == "timed_out" || conclusion == "cancelled" || conclusion == "action_required" || status == "failure" || status == "error":
+		return github.CIStateFailure
+	default:
+		return github.CIStateUnknown
+	}
+}
+
+func changeMeter(additions int, deletions int) string {
+	total := additions + deletions
+	if total == 0 {
+		return mutedStyle.Render("Changes: no line changes reported")
+	}
+	width := 18
+	addWidth := max(1, additions*width/total)
+	if deletions == 0 {
+		addWidth = width
+	}
+	deleteWidth := width - addWidth
+	bar := patchAddStyle.Render(strings.Repeat("+", addWidth)) + patchDeleteStyle.Render(strings.Repeat("-", deleteWidth))
+	return labelStyle.Render("Balance:") + " " + bar + valueStyle.Render(fmt.Sprintf(" +%d -%d", additions, deletions))
+}
+
 func formatCIStatus(status github.CIStatus) string {
 	state := string(status.State)
 	if status.State == "" {
@@ -794,6 +1082,28 @@ func shortSHA(sha string) string {
 		return "-"
 	}
 	return truncate(sha, 7)
+}
+
+func relativeTime(value time.Time) string {
+	if value.IsZero() {
+		return "-"
+	}
+	duration := time.Since(value)
+	if duration < 0 {
+		duration = -duration
+	}
+	switch {
+	case duration < time.Minute:
+		return "now"
+	case duration < time.Hour:
+		return fmt.Sprintf("%dm ago", int(duration.Minutes()))
+	case duration < 48*time.Hour:
+		return fmt.Sprintf("%dh ago", int(duration.Hours()))
+	case duration < 14*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(duration.Hours()/24))
+	default:
+		return value.Format("Jan 2")
+	}
 }
 
 func renderPatch(patch string, width int) string {
@@ -877,22 +1187,34 @@ func clamp(value, low, high int) int {
 }
 
 var (
-	titleStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	statusStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	errorStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	itemStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	selectedStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
-	helpStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	detailRepoStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	titleStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
+	headerBarStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("23")).Padding(0, 1)
+	statusStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("151"))
+	errorStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Background(lipgloss.Color("52")).Padding(0, 1)
+	rowStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Padding(0, 1)
+	selectedRowStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("58")).Padding(0, 1)
+	listIndexStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	itemTitleStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	repoStyle         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("116"))
+	helpStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+	footerBarStyle    = lipgloss.NewStyle().Padding(0, 1)
+	summaryStyle      = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, true, false).BorderForeground(lipgloss.Color("238")).Padding(0, 1, 1, 1)
+	statPillStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("236")).Padding(0, 1).MarginRight(1)
+	emptyStateStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("238")).Padding(1, 2)
+	detailRepoStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("116"))
 	detailTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
-	metaBoxStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Padding(0, 1)
+	metaBoxStyle      = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("238")).Padding(0, 1)
 	labelStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	valueStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	linkStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Underline(true)
-	sectionStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	linkStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Underline(true)
+	sectionStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("222"))
 	mutedStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	tabStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Padding(0, 1)
-	activeTabStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62")).Padding(0, 1)
+	activeTabStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("58")).Padding(0, 1)
+	reasonBadgeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("95")).Padding(0, 1)
+	actionPillStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236")).Padding(0, 1).MarginRight(1)
+	composeTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
+	composeBoxStyle   = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("238")).Padding(1, 2)
 	fileHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
 	patchHunkStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("183"))
 	patchAddStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/vinitkumar/github-pr-attention/internal/github"
 )
@@ -216,6 +217,52 @@ func TestSlashFiltersListAndSelectionUsesFilteredPRs(t *testing.T) {
 	}
 	if pr.Number != 3 {
 		t.Fatalf("selected PR number = %d", pr.Number)
+	}
+}
+
+func TestListViewStartsAtTopAndFitsTerminalHeight(t *testing.T) {
+	model := New(fakeClient{})
+	model.width = 120
+	model.height = 20
+	model.prs = numberedPRs(47)
+	model.loading = false
+	model.status = model.listStatus()
+
+	view := model.View()
+	if !strings.Contains(view, "1/47") {
+		t.Fatalf("expected first PR to be visible, got:\n%s", view)
+	}
+	if strings.Contains(view, "14/47") {
+		t.Fatalf("list rendered too many rows for the terminal height:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > model.height {
+		t.Fatalf("view height = %d, want <= %d\n%s", got, model.height, view)
+	}
+}
+
+func TestListHomeReturnsToFirstPullRequest(t *testing.T) {
+	model := New(fakeClient{})
+	model.width = 120
+	model.height = 20
+	model.prs = numberedPRs(47)
+	model.loading = false
+	model.status = model.listStatus()
+
+	for i := 0; i < 20; i++ {
+		updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+		model = updated.(Model)
+	}
+	if model.listOffset == 0 {
+		t.Fatal("expected moving down to advance the list viewport")
+	}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyHome})
+	model = updated.(Model)
+	if model.selected != 0 || model.listOffset != 0 {
+		t.Fatalf("selected=%d listOffset=%d, want both 0", model.selected, model.listOffset)
+	}
+	if view := model.View(); !strings.Contains(view, "1/47") {
+		t.Fatalf("expected home to show first PR, got:\n%s", view)
 	}
 }
 
@@ -470,6 +517,20 @@ func (fakeClient) Merge(context.Context, string, string, int) error {
 
 func (fakeClient) ClosePullRequest(context.Context, string, string, int) error {
 	return nil
+}
+
+func numberedPRs(count int) []github.PullRequest {
+	prs := make([]github.PullRequest, 0, count)
+	for i := 1; i <= count; i++ {
+		prs = append(prs, github.PullRequest{
+			Owner:  "acme",
+			Repo:   "tool",
+			Number: i,
+			Title:  "Pull request " + strconv.Itoa(i),
+			Author: "octocat",
+		})
+	}
+	return prs
 }
 
 type recordingClient struct {
