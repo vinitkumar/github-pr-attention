@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test ./...
+
+  build:
+    name: Build ${{ matrix.asset_os }} ${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            asset_os: macos
+            goarch: amd64
+          - goos: darwin
+            asset_os: macos
+            goarch: arm64
+          - goos: linux
+            asset_os: linux
+            goarch: amd64
+          - goos: linux
+            asset_os: linux
+            goarch: arm64
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w" -o "dist/pr-attention" ./cmd/pr-attention
+
+      - name: Package binary
+        env:
+          ASSET_OS: ${{ matrix.asset_os }}
+          GOARCH: ${{ matrix.goarch }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          safe_tag="${TAG_NAME//\//-}"
+          archive="pr-attention_${safe_tag}_${ASSET_OS}_${GOARCH}.tar.gz"
+          tar -C dist -czf "$archive" pr-attention
+          shasum -a 256 "$archive" > "$archive.sha256"
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" *.tar.gz *.sha256 --clobber
