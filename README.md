@@ -4,6 +4,20 @@ A terminal inbox for GitHub pull requests that need your attention.
 
 [![asciicast](https://asciinema.org/a/yc2GopjUrsbSgD3b.svg)](https://asciinema.org/a/yc2GopjUrsbSgD3b)
 
+## Screenshots
+
+### Inbox
+
+![Inbox view](screenshots/Screenshot%202026-05-08%20at%2010.58.43.png)
+
+### PR detail
+
+![PR detail view](screenshots/Screenshot%202026-05-08%20at%2010.49.27.png)
+
+### Changed files
+
+![Changed files view](screenshots/Screenshot%202026-05-08%20at%2010.49.35.png)
+
 ## Requirements
 
 - Go 1.26+
