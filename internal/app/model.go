@@ -521,8 +521,10 @@ func (m Model) renderDetailContent() string {
 
 	header := lipgloss.JoinVertical(
 		lipgloss.Left,
-		detailRepoStyle.Render(fmt.Sprintf("%s #%d", d.FullName(), d.Number))+" "+reasonBadgeStyle.Render(reasonSummary(d.Reasons)),
 		detailTitleStyle.Width(bodyWidth).Render(d.Title),
+		mutedStyle.Render(fmt.Sprintf("%s #%d", d.FullName(), d.Number))+" "+reasonBadgeStyle.Render(reasonSummary(d.Reasons)),
+		mutedStyle.Render(d.URL),
+		"",
 		m.detailActionStrip(),
 	)
 
@@ -564,8 +566,6 @@ func (m Model) renderDetailContent() string {
 		sections = append(sections, "", healthPanel)
 	}
 	sections = append(sections,
-		"",
-		linkStyle.Render(d.URL),
 		"",
 		renderTabs(m.detailTab),
 		sectionStyle.Render(section),
@@ -864,9 +864,12 @@ func (m Model) renderPRRow(pr github.PullRequest, selected bool, index int, tota
 	repo := truncate(fmt.Sprintf("%s #%d", pr.FullName(), pr.Number), max(12, rowWidth/3))
 	author := truncate(emptyDash(pr.Author), max(8, rowWidth/6))
 	reason := truncate(reasonSummary(pr.Reasons), max(10, rowWidth/5))
+	titleWidth := max(10, rowWidth-7)
+	title := truncate(pr.Title, titleWidth)
+	titleRendered := itemTitleStyle.Width(titleWidth).Render(title)
 	meta := lipgloss.JoinHorizontal(
 		lipgloss.Top,
-		repoStyle.Render(repo),
+		mutedStyle.Render(repo),
 		"  ",
 		mutedStyle.Render("by "+author),
 		"  ",
@@ -874,12 +877,11 @@ func (m Model) renderPRRow(pr github.PullRequest, selected bool, index int, tota
 		"  ",
 		reasonBadgeStyle.Render(reason),
 	)
-	title := truncate(pr.Title, max(10, rowWidth-lipgloss.Width(position)-3))
 	line := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		listIndexStyle.Render(position),
 		"  ",
-		lipgloss.JoinVertical(lipgloss.Left, meta, itemTitleStyle.Width(rowWidth-7).Render(title)),
+		lipgloss.JoinVertical(lipgloss.Left, titleRendered, meta),
 	)
 	style := rowStyle
 	if selected {
@@ -1259,7 +1261,6 @@ var (
 	colorHeaderFG    = adaptive("#113A5C", "#DDF7FF")
 	colorHeaderBG    = adaptive("#DCEEFF", "#123B46")
 	colorStatus      = adaptive("#0F766E", "#8EE6D2")
-	colorAccent      = adaptive("#0F766E", "#5EEAD4")
 	colorAccentSoft  = adaptive("#D9EDEB", "#164E63")
 	colorPillFG      = adaptive("#075985", "#BFDBFE")
 	colorPillBG      = adaptive("#E0F2FE", "#1E3A5F")
@@ -1267,7 +1268,6 @@ var (
 	colorBadgeBG     = adaptive("#F3E8FF", "#4C1D95")
 	colorActionFG    = adaptive("#243B53", "#D7E0EA")
 	colorActionBG    = adaptive("#E8EEF5", "#263241")
-	colorLink        = adaptive("#2563EB", "#93C5FD")
 	colorSection     = adaptive("#0369A1", "#67E8F9")
 	colorErrorFG     = adaptive("#991B1B", "#FECACA")
 	colorErrorBG     = adaptive("#FEE2E2", "#7F1D1D")
@@ -1283,19 +1283,16 @@ var (
 	rowStyle          = lipgloss.NewStyle().Foreground(colorText).Padding(0, 1)
 	selectedRowStyle  = lipgloss.NewStyle().Foreground(colorTextStrong).Background(colorAccentSoft).Padding(0, 1)
 	listIndexStyle    = lipgloss.NewStyle().Foreground(colorSubtle)
-	itemTitleStyle    = lipgloss.NewStyle().Foreground(colorText)
-	repoStyle         = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+	itemTitleStyle    = lipgloss.NewStyle().Bold(true).Foreground(colorTextStrong)
 	helpStyle         = lipgloss.NewStyle().Foreground(colorMuted)
 	footerBarStyle    = lipgloss.NewStyle().Padding(0, 1)
 	summaryStyle      = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, true, false).BorderForeground(colorBorder).Padding(0, 1, 1, 1)
 	statPillStyle     = lipgloss.NewStyle().Foreground(colorPillFG).Background(colorPillBG).Padding(0, 1).MarginRight(1)
 	emptyStateStyle   = lipgloss.NewStyle().Foreground(colorMuted).Border(lipgloss.NormalBorder()).BorderForeground(colorBorder).Padding(1, 2)
-	detailRepoStyle   = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
-	detailTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(colorTextStrong)
+	detailTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(colorTextStrong).MarginBottom(1).Border(lipgloss.NormalBorder(), false, false, true, false).BorderForeground(colorBorder)
 	metaBoxStyle      = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(colorBorder).Padding(0, 1)
 	labelStyle        = lipgloss.NewStyle().Foreground(colorMuted)
 	valueStyle        = lipgloss.NewStyle().Foreground(colorText)
-	linkStyle         = lipgloss.NewStyle().Foreground(colorLink).Underline(true)
 	sectionStyle      = lipgloss.NewStyle().Bold(true).Foreground(colorSection)
 	mutedStyle        = lipgloss.NewStyle().Foreground(colorMuted)
 	tabStyle          = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 1)
