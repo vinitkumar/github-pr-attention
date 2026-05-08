@@ -2,8 +2,6 @@
 
 A terminal inbox for GitHub pull requests that need your attention.
 
-[![asciicast](https://asciinema.org/a/yc2GopjUrsbSgD3b.svg)](https://asciinema.org/a/yc2GopjUrsbSgD3b)
-
 ## Screenshots
 
 ### Inbox
