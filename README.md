@@ -1,6 +1,10 @@
 # GitHub PR Attention
 
-A terminal inbox for GitHub pull requests that need your attention.
+A terminal inbox and report CLI for GitHub pull requests that need your attention.
+
+`pr-attention` collects open pull requests where you are requested for review,
+assigned, mentioned, or the author. Use the TUI for hands-on review, or emit a
+text/JSON report for scripts, status checks, and daily planning.
 
 ## Screenshots
 
@@ -29,6 +33,21 @@ go run ./cmd/pr-attention
 ```
 
 `GH_TOKEN` is also accepted.
+
+### Report Mode
+
+Use `--format text` when you want a quick inbox snapshot without opening the
+interactive TUI:
+
+```sh
+go run ./cmd/pr-attention --format text --limit 10
+```
+
+Use `--format json` when another tool should consume the review inbox:
+
+```sh
+go run ./cmd/pr-attention --format json
+```
 
 ## Build
 
